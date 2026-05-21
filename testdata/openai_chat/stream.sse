@@ -1,0 +1,7 @@
+data: {"choices":[{"delta":{"content":"One"}}]}
+
+data: {"choices":[{"delta":{"content":"two"}}]}
+
+data: {"choices":[{"delta":{"content":"three"}}]}
+
+data: [DONE]

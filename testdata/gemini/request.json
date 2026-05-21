@@ -1,0 +1,19 @@
+{
+  "systemInstruction": {
+    "parts": [
+      {
+        "text": "Keep it short."
+      }
+    ]
+  },
+  "contents": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "text": "Summarize stars."
+        }
+      ]
+    }
+  ]
+}

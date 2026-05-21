@@ -1,0 +1,22 @@
+{
+  "system": "You are Claude.",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Say hi."
+        },
+        {
+          "type": "image",
+          "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": "abc"
+          }
+        }
+      ]
+    }
+  ]
+}
