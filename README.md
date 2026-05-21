@@ -363,51 +363,10 @@ fmt.Printf("%+v\n", result.Usage)
 
 ### 9. 流式响应统计
 
-流式场景通常有两种用法：
+推荐优先使用 `StreamingCounter`，因为它同时覆盖两种需求：
 
-- 整段流结束后再统一统计
 - 一边接收 chunk，一边持续拿累计 token
-
-如果你只想在流结束后拿最终结果，可以先用 collector 聚合，再调用 `Estimate`：
-
-```go
-service := tokencalc.New()
-
-collector, err := tokencalc.NewStreamCollector(tokencalc.ProtocolOpenAIChat)
-if err != nil {
-	log.Fatal(err)
-}
-
-chunks := [][]byte{
-	[]byte("data: {\"choices\":[{\"delta\":{\"content\":\"One\"}}]}\n\n"),
-	[]byte("data: {\"choices\":[{\"delta\":{\"content\":\"\\ntwo\"}}]}\n\n"),
-	[]byte("data: {\"choices\":[{\"delta\":{\"content\":\"\\nthree\"}}]}\n\n"),
-	[]byte("data: [DONE]\n\n"),
-}
-
-for _, chunk := range chunks {
-	if err := collector.AddChunk(chunk); err != nil {
-		log.Fatal(err)
-	}
-}
-
-result, err := service.Estimate(tokencalc.EstimateRequest{
-	Protocol:     tokencalc.ProtocolOpenAIChat,
-	RequestModel: "gpt-4o-mini",
-	RequestBody: []byte(`{
-		"messages":[{"role":"user","content":"Count to three."}]
-	}`),
-	ResponseBody: collector.FinalBody(),
-	IsStream:     true,
-})
-if err != nil {
-	log.Fatal(err)
-}
-
-fmt.Printf("%+v\n", result.Usage)
-```
-
-如果你的场景是“边接收流式输出，边持续拿到当前 token 统计”，可以直接使用 `StreamingCounter`：
+- 流结束后拿最终结果
 
 ```go
 counter, err := tokencalc.NewStreamingCounter(tokencalc.EstimateRequest{
@@ -462,6 +421,8 @@ fmt.Printf("最终 usage=%+v\n", final.Result.Usage)
 - 中间没有 `usage` 时，`Result.Source` 会是 `local_estimate`
 - 一旦某个新 chunk 里出现完整 `usage`，下一次 `AddChunk` 会自动切到 `reported_usage`
 - 如果上游只返回了部分 usage，则会自动走 `merged`
+
+如果你只需要底层的流式聚合能力、不需要中间 token 统计，也可以继续使用 `NewStreamCollector(...)` 自己收集 chunk，最后再配合 `Estimate(...)` 计算。
 
 ### 10. 只统计单个流式 chunk
 
