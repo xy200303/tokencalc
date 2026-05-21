@@ -1,0 +1,15 @@
+{
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "One, two, three."
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 111,
+    "completion_tokens": 222,
+    "total_tokens": 333
+  }
+}

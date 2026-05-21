@@ -1,0 +1,12 @@
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are helpful."
+    },
+    {
+      "role": "user",
+      "content": "Count to three."
+    }
+  ]
+}

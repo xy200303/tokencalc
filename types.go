@@ -38,8 +38,20 @@ type EstimateRequest struct {
 	ReportedUsage *Usage
 }
 
+type CountTextRequest struct {
+	Model string
+	Text  string
+}
+
+type CountTextResult struct {
+	Count    int
+	Encoding string
+	Error    error
+}
+
 type EstimateResult struct {
 	Usage             Usage
+	ResolvedModel     string
 	Source            EstimateSource
 	Encoding          string
 	Supported         bool
@@ -48,13 +60,31 @@ type EstimateResult struct {
 	CompletionTextLen int
 }
 
+type EstimateBatchResult struct {
+	Result EstimateResult
+	Error  error
+}
+
+type StreamEstimateUpdate struct {
+	Result  EstimateResult
+	Delta   Usage
+	Updated bool
+}
+
 type Service interface {
 	Estimate(req EstimateRequest) (EstimateResult, error)
 	CountText(model string, text string) (count int, encoding string, err error)
 }
 
+type BatchService interface {
+	Service
+	EstimateBatch(requests []EstimateRequest) []EstimateBatchResult
+	CountTexts(requests []CountTextRequest) []CountTextResult
+}
+
 type Config struct {
 	PlaceholderPolicy PlaceholderPolicy
+	Registry          *Registry
 }
 
 type Option func(*Config)
@@ -62,5 +92,39 @@ type Option func(*Config)
 func WithPlaceholderPolicy(policy PlaceholderPolicy) Option {
 	return func(cfg *Config) {
 		cfg.PlaceholderPolicy = policy
+	}
+}
+
+func WithRegistry(registry *Registry) Option {
+	return func(cfg *Config) {
+		if registry == nil {
+			cfg.Registry = nil
+			return
+		}
+		cfg.Registry = registry.Clone()
+	}
+}
+
+func WithEstimator(protocol Protocol, estimator Estimator) Option {
+	return func(cfg *Config) {
+		if protocol == "" || estimator == nil {
+			return
+		}
+		if cfg.Registry == nil {
+			cfg.Registry = NewRegistry()
+		}
+		cfg.Registry.Register(protocol, estimator)
+	}
+}
+
+func WithStreamCollectorFactory(protocol Protocol, factory StreamCollectorFactory) Option {
+	return func(cfg *Config) {
+		if protocol == "" || factory == nil {
+			return
+		}
+		if cfg.Registry == nil {
+			cfg.Registry = NewRegistry()
+		}
+		cfg.Registry.RegisterStreamCollector(protocol, factory)
 	}
 }

@@ -1,0 +1,14 @@
+{
+  "modelVersion": "gemini-2.0-flash",
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "Stars are hot balls of gas."
+          }
+        ]
+      }
+    }
+  ]
+}

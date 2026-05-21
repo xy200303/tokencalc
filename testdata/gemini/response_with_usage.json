@@ -1,0 +1,18 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "Stars are hot balls of gas."
+          }
+        ]
+      }
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 12,
+    "candidatesTokenCount": 5,
+    "totalTokenCount": 17
+  }
+}

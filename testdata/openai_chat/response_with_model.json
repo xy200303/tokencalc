@@ -1,0 +1,11 @@
+{
+  "model": "gpt-4o-mini",
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "One, two, three."
+      }
+    }
+  ]
+}

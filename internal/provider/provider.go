@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	internalstream "github.com/xy200303/tokencalc/internal/stream"
@@ -23,9 +24,45 @@ type ExtractResult struct {
 	Note        string
 }
 
+type ReportedUsage struct {
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+}
+
+func (u ReportedUsage) HasAny() bool {
+	return u.PromptTokens > 0 || u.CompletionTokens > 0 || u.TotalTokens > 0
+}
+
+type ReportedUsageResult struct {
+	Usage ReportedUsage
+	Note  string
+}
+
+type RequestPayload struct {
+	Object map[string]any
+}
+
+type ResponsePayload struct {
+	Object map[string]any
+	Events []map[string]any
+}
+
 type Estimator interface {
 	ExtractPrompt(body []byte) (ExtractResult, error)
 	ExtractCompletion(body []byte, isStream bool) (ExtractResult, error)
+	ExtractReportedUsage(body []byte, isStream bool) (ReportedUsageResult, error)
+}
+
+type PreparedEstimator interface {
+	Estimator
+	PrepareRequest(body []byte) (RequestPayload, error)
+	PrepareResponse(body []byte, isStream bool) (ResponsePayload, error)
+	ExtractPromptPrepared(payload RequestPayload) (ExtractResult, error)
+	ExtractCompletionPrepared(payload ResponsePayload, isStream bool) (ExtractResult, error)
+	ExtractReportedUsagePrepared(payload ResponsePayload, isStream bool) (ReportedUsageResult, error)
+	ExtractRequestModelPrepared(payload RequestPayload) string
+	ExtractResponseModelPrepared(payload ResponsePayload, isStream bool) string
 }
 
 func decodeJSONObject(body []byte) (map[string]any, error) {
@@ -183,4 +220,138 @@ func joinProviderNotes(notes ...string) string {
 		filtered = append(filtered, note)
 	}
 	return strings.Join(filtered, "; ")
+}
+
+func PrepareRequestObject(body []byte) (RequestPayload, error) {
+	object, err := decodeJSONObject(body)
+	if err != nil {
+		return RequestPayload{}, err
+	}
+	return RequestPayload{Object: object}, nil
+}
+
+func PrepareResponseObject(body []byte, isStream bool) (ResponsePayload, error) {
+	if !isStream {
+		object, err := decodeJSONObject(body)
+		if err != nil {
+			return ResponsePayload{}, err
+		}
+		return ResponsePayload{Object: object}, nil
+	}
+
+	events, err := extractEventObjects(body)
+	if err != nil {
+		return ResponsePayload{}, err
+	}
+	return ResponsePayload{Events: events}, nil
+}
+
+func mergeReportedUsage(current ReportedUsage, next ReportedUsage) ReportedUsage {
+	if next.PromptTokens > current.PromptTokens {
+		current.PromptTokens = next.PromptTokens
+	}
+	if next.CompletionTokens > current.CompletionTokens {
+		current.CompletionTokens = next.CompletionTokens
+	}
+	if next.TotalTokens > current.TotalTokens {
+		current.TotalTokens = next.TotalTokens
+	}
+	return current
+}
+
+func intValue(value any) int {
+	switch typed := value.(type) {
+	case nil:
+		return 0
+	case json.Number:
+		if whole, err := typed.Int64(); err == nil {
+			return int(whole)
+		}
+		if decimal, err := typed.Float64(); err == nil {
+			return int(decimal)
+		}
+	case float64:
+		return int(typed)
+	case float32:
+		return int(typed)
+	case int:
+		return typed
+	case int8:
+		return int(typed)
+	case int16:
+		return int(typed)
+	case int32:
+		return int(typed)
+	case int64:
+		return int(typed)
+	case string:
+		if typed == "" {
+			return 0
+		}
+		if whole, err := strconv.Atoi(typed); err == nil {
+			return whole
+		}
+	}
+	return 0
+}
+
+func nonNegative(value int) int {
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
+func normalizeReportedUsage(usage ReportedUsage) ReportedUsage {
+	usage.PromptTokens = nonNegative(usage.PromptTokens)
+	usage.CompletionTokens = nonNegative(usage.CompletionTokens)
+	usage.TotalTokens = nonNegative(usage.TotalTokens)
+
+	sum := usage.PromptTokens + usage.CompletionTokens
+	if usage.TotalTokens == 0 && sum > 0 {
+		usage.TotalTokens = sum
+	}
+	if usage.TotalTokens > 0 && usage.TotalTokens < sum {
+		usage.TotalTokens = sum
+	}
+	return usage
+}
+
+func findModelInObject(mapped map[string]any, paths [][]string) string {
+	return findModelInValue(mapped, paths)
+}
+
+func findModelInEvents(events []map[string]any, paths [][]string) string {
+	for _, event := range events {
+		if model := findModelInValue(event, paths); model != "" {
+			return model
+		}
+	}
+	return ""
+}
+
+func findModelInValue(current any, paths [][]string) string {
+	for _, path := range paths {
+		if model := stringAtPath(current, path); model != "" {
+			return model
+		}
+	}
+	return ""
+}
+
+func stringAtPath(current any, path []string) string {
+	if len(path) == 0 {
+		return strings.TrimSpace(text.StringValue(current))
+	}
+
+	mapped, ok := text.AsMap(current)
+	if !ok {
+		return ""
+	}
+
+	next, ok := mapped[path[0]]
+	if !ok {
+		return ""
+	}
+	return stringAtPath(next, path[1:])
 }
