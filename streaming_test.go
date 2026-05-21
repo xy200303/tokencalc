@@ -194,3 +194,154 @@ func TestStreamingCounterSwitchesToReportedUsageWhenStreamUsageArrives(t *testin
 		t.Fatalf("third.Delta = %+v, want usage sync delta", third.Delta)
 	}
 }
+
+func TestStreamingCounterClearResetsAccumulatedState(t *testing.T) {
+	t.Parallel()
+
+	request := EstimateRequest{
+		Protocol:     ProtocolOpenAIChat,
+		RequestModel: "gpt-4o-mini",
+		RequestBody:  []byte(`{"messages":[{"role":"user","content":"Count to three."}]}`),
+	}
+
+	counter, err := NewStreamingCounter(request)
+	if err != nil {
+		t.Fatalf("NewStreamingCounter() error = %v", err)
+	}
+
+	chunk := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"One\"}}]}\n\n")
+
+	first, err := counter.AddChunk(chunk)
+	if err != nil {
+		t.Fatalf("AddChunk(first) error = %v", err)
+	}
+	if !first.Updated {
+		t.Fatal("first.Updated = false, want true")
+	}
+
+	if err := counter.Clear(); err != nil {
+		t.Fatalf("Clear() error = %v", err)
+	}
+	if got := string(counter.FinalBody()); got != "" {
+		t.Fatalf("FinalBody() = %q, want empty after Clear()", got)
+	}
+
+	second, err := counter.AddChunk(chunk)
+	if err != nil {
+		t.Fatalf("AddChunk(second) error = %v", err)
+	}
+	if !second.Updated {
+		t.Fatal("second.Updated = false, want true")
+	}
+	if second.Result != first.Result {
+		t.Fatalf("second.Result = %+v, want %+v", second.Result, first.Result)
+	}
+	if second.Delta != first.Delta {
+		t.Fatalf("second.Delta = %+v, want %+v", second.Delta, first.Delta)
+	}
+}
+
+func TestStreamingCounterResetReplacesRequestContext(t *testing.T) {
+	t.Parallel()
+
+	service := New()
+	initialRequest := EstimateRequest{
+		Protocol:     ProtocolOpenAIChat,
+		RequestModel: "gpt-4o-mini",
+		RequestBody:  []byte(`{"messages":[{"role":"user","content":"Count to three."}]}`),
+	}
+	resetRequest := EstimateRequest{
+		Protocol:     ProtocolOpenAIChat,
+		RequestModel: "gpt-4o-mini",
+		RequestBody:  []byte(`{"messages":[{"role":"user","content":"Say hello twice."}]}`),
+	}
+
+	counter, err := NewStreamingCounter(initialRequest)
+	if err != nil {
+		t.Fatalf("NewStreamingCounter() error = %v", err)
+	}
+
+	chunk := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n")
+
+	if _, err := counter.AddChunk(chunk); err != nil {
+		t.Fatalf("AddChunk(initial) error = %v", err)
+	}
+
+	if err := counter.Reset(resetRequest); err != nil {
+		t.Fatalf("Reset() error = %v", err)
+	}
+
+	update, err := counter.AddChunk(chunk)
+	if err != nil {
+		t.Fatalf("AddChunk(after Reset) error = %v", err)
+	}
+
+	want, err := service.Estimate(EstimateRequest{
+		Protocol:     resetRequest.Protocol,
+		RequestModel: resetRequest.RequestModel,
+		RequestBody:  resetRequest.RequestBody,
+		ResponseBody: chunk,
+		IsStream:     true,
+	})
+	if err != nil {
+		t.Fatalf("Estimate(want) error = %v", err)
+	}
+
+	if update.Result != want {
+		t.Fatalf("update.Result = %+v, want %+v", update.Result, want)
+	}
+	if update.Delta != NormalizeUsage(want.Usage) {
+		t.Fatalf("update.Delta = %+v, want %+v", update.Delta, NormalizeUsage(want.Usage))
+	}
+}
+
+func TestStreamingCounterResetRequestBodyReusesCurrentConfig(t *testing.T) {
+	t.Parallel()
+
+	service := New()
+	counter, err := NewStreamingCounter(EstimateRequest{
+		Protocol:     ProtocolOpenAIChat,
+		RequestModel: "gpt-4o-mini",
+		RequestBody:  []byte(`{"messages":[{"role":"user","content":"Count to three."}]}`),
+	})
+	if err != nil {
+		t.Fatalf("NewStreamingCounter() error = %v", err)
+	}
+
+	if _, err := counter.AddChunk([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"One\"}}]}\n\n")); err != nil {
+		t.Fatalf("AddChunk(initial) error = %v", err)
+	}
+
+	newBody := []byte(`{"messages":[{"role":"user","content":"Say hello twice."}]}`)
+	if err := counter.ResetRequestBody(newBody); err != nil {
+		t.Fatalf("ResetRequestBody() error = %v", err)
+	}
+
+	if got := string(counter.FinalBody()); got != "" {
+		t.Fatalf("FinalBody() = %q, want empty after ResetRequestBody()", got)
+	}
+
+	chunk := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n")
+	update, err := counter.AddChunk(chunk)
+	if err != nil {
+		t.Fatalf("AddChunk(after ResetRequestBody) error = %v", err)
+	}
+
+	want, err := service.Estimate(EstimateRequest{
+		Protocol:     ProtocolOpenAIChat,
+		RequestModel: "gpt-4o-mini",
+		RequestBody:  newBody,
+		ResponseBody: chunk,
+		IsStream:     true,
+	})
+	if err != nil {
+		t.Fatalf("Estimate(want) error = %v", err)
+	}
+
+	if update.Result != want {
+		t.Fatalf("update.Result = %+v, want %+v", update.Result, want)
+	}
+	if update.Delta != NormalizeUsage(want.Usage) {
+		t.Fatalf("update.Delta = %+v, want %+v", update.Delta, NormalizeUsage(want.Usage))
+	}
+}

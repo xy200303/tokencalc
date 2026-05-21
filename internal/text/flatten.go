@@ -14,7 +14,8 @@ type PlaceholderPolicy struct {
 }
 
 type Builder struct {
-	parts       []string
+	text        strings.Builder
+	hasText     bool
 	extraTokens int
 	notes       []string
 	seenNotes   map[string]struct{}
@@ -31,7 +32,11 @@ func (b *Builder) AddText(value string) {
 	if value == "" {
 		return
 	}
-	b.parts = append(b.parts, value)
+	if b.hasText {
+		b.text.WriteByte('\n')
+	}
+	b.text.WriteString(value)
+	b.hasText = true
 }
 
 func (b *Builder) AddJSON(value any) {
@@ -73,11 +78,11 @@ func (b *Builder) AddNote(note string) {
 }
 
 func (b *Builder) Result() (text string, extraTokens int, note string) {
-	return strings.Join(b.parts, "\n"), b.extraTokens, strings.Join(b.notes, "; ")
+	return b.text.String(), b.extraTokens, strings.Join(b.notes, "; ")
 }
 
 func (b *Builder) ResultText() string {
-	return strings.Join(b.parts, "\n")
+	return b.text.String()
 }
 
 func AsMap(value any) (map[string]any, bool) {

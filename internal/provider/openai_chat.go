@@ -10,6 +10,16 @@ func NewOpenAIChat(policy PlaceholderPolicy) Estimator {
 	return openAIChatEstimator{policy: buildPolicy(policy)}
 }
 
+func (e openAIChatEstimator) NewStreamAccumulator() StreamAccumulator {
+	return &openAIChatStreamAccumulator{
+		baseStreamAccumulator: newBaseStreamAccumulator(
+			"reported usage extracted from stream events",
+			"stream contained no extractable chat deltas",
+		),
+		policy: e.policy,
+	}
+}
+
 func (e openAIChatEstimator) PrepareRequest(body []byte) (RequestPayload, error) {
 	return PrepareRequestObject(body)
 }
@@ -154,5 +164,19 @@ func extractOpenAIUsage(mapped map[string]any) ReportedUsage {
 		PromptTokens:     intValue(usageMap["prompt_tokens"]),
 		CompletionTokens: intValue(usageMap["completion_tokens"]),
 		TotalTokens:      intValue(usageMap["total_tokens"]),
+	}
+}
+
+type openAIChatStreamAccumulator struct {
+	baseStreamAccumulator
+	policy text.PlaceholderPolicy
+}
+
+func (a *openAIChatStreamAccumulator) AddEvent(event map[string]any) {
+	a.setModelIfEmpty(findModelInObject(event, [][]string{{"model"}}))
+	a.mergeUsage(extractOpenAIUsage(event))
+
+	if choices, ok := event["choices"]; ok {
+		appendGenericContent(a.builder, choices, a.policy)
 	}
 }

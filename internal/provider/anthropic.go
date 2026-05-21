@@ -14,6 +14,16 @@ func NewAnthropic(policy PlaceholderPolicy) Estimator {
 	return anthropicEstimator{policy: buildPolicy(policy)}
 }
 
+func (e anthropicEstimator) NewStreamAccumulator() StreamAccumulator {
+	return &anthropicStreamAccumulator{
+		baseStreamAccumulator: newBaseStreamAccumulator(
+			"reported usage extracted from stream events",
+			"stream contained no extractable anthropic deltas",
+		),
+		policy: e.policy,
+	}
+}
+
 func (e anthropicEstimator) PrepareRequest(body []byte) (RequestPayload, error) {
 	return PrepareRequestObject(body)
 }
@@ -166,5 +176,32 @@ func extractAnthropicUsage(mapped map[string]any) ReportedUsage {
 		PromptTokens:     intValue(usageMap["input_tokens"]),
 		CompletionTokens: intValue(usageMap["output_tokens"]),
 		TotalTokens:      intValue(usageMap["total_tokens"]),
+	}
+}
+
+type anthropicStreamAccumulator struct {
+	baseStreamAccumulator
+	policy text.PlaceholderPolicy
+}
+
+func (a *anthropicStreamAccumulator) AddEvent(event map[string]any) {
+	a.setModelIfEmpty(findModelInObject(event, [][]string{{"model"}, {"message", "model"}}))
+	a.mergeUsage(extractAnthropicUsage(event))
+	if message, ok := text.AsMap(event["message"]); ok {
+		a.mergeUsage(extractAnthropicUsage(message))
+	}
+
+	eventType := strings.ToLower(text.StringValue(event["type"]))
+	switch eventType {
+	case "content_block_delta":
+		if delta, ok := text.AsMap(event["delta"]); ok {
+			appendGenericContent(a.builder, delta, a.policy)
+		}
+	case "content_block_start":
+		if block, ok := text.AsMap(event["content_block"]); ok {
+			appendGenericContent(a.builder, block, a.policy)
+		}
+	default:
+		appendGenericContent(a.builder, event, a.policy)
 	}
 }

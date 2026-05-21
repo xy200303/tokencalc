@@ -406,6 +406,26 @@ if err != nil {
 }
 
 fmt.Printf("最终 usage=%+v\n", final.Result.Usage)
+
+if err := counter.Clear(); err != nil {
+	log.Fatal(err)
+}
+
+if err := counter.Reset(tokencalc.EstimateRequest{
+	Protocol:     tokencalc.ProtocolOpenAIChat,
+	RequestModel: "gpt-4o-mini",
+	RequestBody: []byte(`{
+		"messages":[{"role":"user","content":"Start a new conversation."}]
+	}`),
+}); err != nil {
+	log.Fatal(err)
+}
+
+if err := counter.ResetRequestBody([]byte(`{
+	"messages":[{"role":"user","content":"Reuse the same config, but start another dialog."}]
+}`)); err != nil {
+	log.Fatal(err)
+}
 ```
 
 `StreamingCounter` 的行为是：
@@ -415,6 +435,9 @@ fmt.Printf("最终 usage=%+v\n", final.Result.Usage)
 - 一旦已经能形成新的有效流式结果，就返回最新累计值
 - `update.Delta` 表示相对上一次成功结果的增量
 - `FinalResult()` 用来在流结束时做最终校验；如果最后还残留半条坏数据，会返回错误
+- `Clear()` 会清空当前会话的 chunk 缓冲和累计结果，但保留当前请求配置
+- `Reset(req)` 会在复用同一个 counter 的同时切换到新的请求上下文，适合连续统计多个对话
+- `ResetRequestBody(body)` 会复用当前协议、模型和其它配置，只替换请求体，适合同类对话连续统计
 
 如果某些模型是在最后一个 chunk 才返回总的 `usage`，当前实现也会自动同步：
 
@@ -643,19 +666,34 @@ go test -run '^$' -bench . -benchmem .
 
 | Benchmark | ns/op | B/op | allocs/op |
 | --- | ---: | ---: | ---: |
-| `BenchmarkCountText` | 74562 | 27092 | 387 |
-| `BenchmarkCountTextsBatch8` | 574110 | 216773 | 3098 |
-| `BenchmarkEstimateOpenAIChatLocal` | 24034 | 10805 | 172 |
-| `BenchmarkEstimateOpenAIChatReportedUsage` | 7321 | 5128 | 81 |
-| `BenchmarkEstimateOpenAIChatStream` | 30022 | 19523 | 230 |
-| `BenchmarkEstimateBatchOpenAIChat8` | 188078 | 87518 | 1377 |
-| `BenchmarkEstimateOpenAIResponsesReportedUsage` | 8388 | 5488 | 92 |
+| `BenchmarkCountText` | 113603 | 26144 | 374 |
+| `BenchmarkCountTextsBatch8` | 847566 | 209472 | 2993 |
+| `BenchmarkEstimateOpenAIChatLocal` | 34217 | 10480 | 167 |
+| `BenchmarkEstimateOpenAIChatPromptOnly` | 19666 | 5856 | 97 |
+| `BenchmarkEstimateOpenAIChatReportedUsage` | 10435 | 5128 | 81 |
+| `BenchmarkEstimateOpenAIChatStream` | 42481 | 19024 | 222 |
+| `BenchmarkEstimateOpenAIChatSingleStreamChunk` | 8854 | 7008 | 45 |
+| `BenchmarkEstimateBatchOpenAIChat8` | 335881 | 84992 | 1337 |
+| `BenchmarkEstimateOpenAIResponsesLocal` | 34461 | 9912 | 161 |
+| `BenchmarkEstimateOpenAIResponsesReportedUsage` | 12253 | 5487 | 92 |
+| `BenchmarkEstimateAnthropicLocal` | 36263 | 14712 | 242 |
+| `BenchmarkEstimateAnthropicReportedUsage` | 22531 | 11120 | 182 |
+| `BenchmarkEstimateGeminiLocal` | 43364 | 17960 | 256 |
+| `BenchmarkEstimateGeminiReportedUsage` | 26455 | 12720 | 178 |
+| `BenchmarkStreamingCounterOpenAIChatLocal` | 55114 | 18032 | 266 |
+| `BenchmarkStreamingCounterOpenAIChatUsageSync` | 44767 | 16592 | 246 |
 
 可以粗略理解为：
 
 - 纯 `CountText` 会更依赖 tokenizer 编码过程
+- 只统计请求侧 token 的 `EstimateOpenAIChatPromptOnly` 明显快于完整请求+响应估算
 - 已带 usage 的响应路径最快，因为无需完整本地估算
+- 单个完整流式 chunk 的直接估算非常轻量，适合做增量统计
 - 流式场景会多一层事件聚合开销
+- `StreamingCounter` 的 benchmark 是“整段流会话”的端到端成本，不是单个 chunk 的成本
+- 经过当前这轮优化，`StreamingCounter` 已改成增量事件处理，避免每个 chunk 都对整段流重新解析
+- 相比早期“整段流反复全量重算”的实现，`StreamingCounter` 的耗时和分配都已经下降到更可用的量级
+- Anthropic 和 Gemini 的本地估算分配更高，主要因为协议结构和占位符处理更复杂
 - 批量接口适合在单个 service 上复用配置和协议实现
 
 注意：benchmark 会受到 Go 版本、CPU、请求体大小和 payload 结构影响，实际业务值请以你的环境复测为准。

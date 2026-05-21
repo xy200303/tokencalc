@@ -27,6 +27,10 @@ type preparedPayloads struct {
 var defaultService BatchService = New()
 
 func New(options ...Option) BatchService {
+	return newService(options...)
+}
+
+func newService(options ...Option) *service {
 	cfg := Config{
 		PlaceholderPolicy: DefaultPlaceholderPolicy(),
 	}
@@ -234,6 +238,212 @@ func (s *service) Estimate(req EstimateRequest) (EstimateResult, error) {
 			result.Note = joinNotes(modelNote, encodingNote, promptResult.Note, completionResult.Note, "protocol payload unsupported")
 		} else {
 			result.Note = joinNotes(modelNote, encodingNote, promptResult.Note, completionResult.Note, "no text extracted from payload")
+		}
+	}
+
+	return result, nil
+}
+
+func (s *service) estimateResponseOnly(req EstimateRequest) (EstimateResult, error) {
+	estimator, ok := s.estimators[req.Protocol]
+	prepared := newPreparedPayloads(estimator)
+
+	model, modelNote, err := resolveEstimateModelWithPrepared(req, prepared)
+	if err != nil {
+		return EstimateResult{}, err
+	}
+
+	encoding, encodingNote := resolveEncodingNote(model)
+	callerReported := normalizeReportedUsage(req.ReportedUsage)
+
+	result := EstimateResult{
+		ResolvedModel: model,
+		Encoding:      encoding,
+		Supported:     true,
+	}
+
+	if callerReported.HasAny() && !usageNeedsMerge(callerReported) {
+		result.Usage = callerReported
+		result.Source = SourceReportedUsage
+		result.Note = joinNotes(modelNote, encodingNote, "reported usage provided by caller", "reported usage used directly")
+		return result, nil
+	}
+
+	if !ok {
+		if callerReported.HasAny() {
+			result.Usage = callerReported
+			result.Source = SourceReportedUsage
+			result.Note = joinNotes(
+				modelNote,
+				encodingNote,
+				"reported usage provided by caller",
+				"protocol unsupported, reported usage returned as-is",
+			)
+			return result, nil
+		}
+		result.Source = SourceUnsupported
+		result.Supported = false
+		result.Note = joinNotes(modelNote, encodingNote, fmt.Sprintf("unsupported protocol: %s", req.Protocol))
+		return result, nil
+	}
+
+	extractedReported, err := extractReportedUsageWithPrepared(estimator, prepared, req.ResponseBody, req.IsStream)
+	if err != nil {
+		return EstimateResult{}, fmt.Errorf("extract reported usage: %w", err)
+	}
+
+	reported := callerReported
+	if extractedReported.Usage.HasAny() {
+		reported = MergeUsage(reported, toUsage(extractedReported.Usage))
+	}
+
+	if reported.HasAny() && !usageNeedsMerge(reported) {
+		result.Usage = reported
+		result.Source = SourceReportedUsage
+		result.Note = joinNotes(
+			modelNote,
+			encodingNote,
+			reportedUsageOriginNote(callerReported, extractedReported),
+			"reported usage used directly",
+		)
+		return result, nil
+	}
+
+	completionResult, err := extractCompletionWithPrepared(estimator, prepared, req.ResponseBody, req.IsStream)
+	if err != nil {
+		return EstimateResult{}, fmt.Errorf("extract completion: %w", err)
+	}
+
+	localUsage := Usage{}
+	if completionResult.Text != "" || completionResult.ExtraTokens > 0 {
+		count, err := s.codec.Count(encoding, completionResult.Text)
+		if err != nil {
+			return EstimateResult{}, fmt.Errorf("count completion tokens: %w", err)
+		}
+		localUsage.CompletionTokens = count + completionResult.ExtraTokens
+		result.CompletionTextLen = utf8.RuneCountInString(completionResult.Text)
+	}
+
+	localUsage = NormalizeUsage(localUsage)
+
+	switch {
+	case reported.HasAny() && localUsage.HasAny():
+		result.Usage = MergeUsage(reported, localUsage)
+		result.Source = SourceMerged
+		result.Note = joinNotes(
+			modelNote,
+			encodingNote,
+			reportedUsageOriginNote(callerReported, extractedReported),
+			completionResult.Note,
+			"reported usage incomplete, merged with local estimate",
+		)
+	case reported.HasAny():
+		result.Usage = reported
+		result.Source = SourceReportedUsage
+		result.Note = joinNotes(
+			modelNote,
+			encodingNote,
+			reportedUsageOriginNote(callerReported, extractedReported),
+			completionResult.Note,
+			"local estimate unavailable, reported usage returned",
+		)
+	case localUsage.HasAny():
+		result.Usage = localUsage
+		result.Source = SourceLocalEstimate
+		result.Note = joinNotes(modelNote, encodingNote, completionResult.Note, "local estimate used")
+	default:
+		result.Source = SourceUnsupported
+		result.Supported = completionResult.Supported
+		if !result.Supported {
+			result.Note = joinNotes(modelNote, encodingNote, completionResult.Note, "protocol payload unsupported")
+		} else {
+			result.Note = joinNotes(modelNote, encodingNote, completionResult.Note, "no text extracted from payload")
+		}
+	}
+
+	return result, nil
+}
+
+func (s *service) estimatePromptOnly(req EstimateRequest) (EstimateResult, error) {
+	estimator, ok := s.estimators[req.Protocol]
+	prepared := newPreparedPayloads(estimator)
+
+	model, modelNote, err := resolveEstimateModelWithPrepared(req, prepared)
+	if err != nil {
+		return EstimateResult{}, err
+	}
+
+	encoding, encodingNote := resolveEncodingNote(model)
+	callerReported := normalizeReportedUsage(req.ReportedUsage)
+
+	result := EstimateResult{
+		ResolvedModel: model,
+		Encoding:      encoding,
+		Supported:     true,
+	}
+
+	if callerReported.HasAny() && !usageNeedsMerge(callerReported) {
+		result.Usage = callerReported
+		result.Source = SourceReportedUsage
+		result.Note = joinNotes(modelNote, encodingNote, "reported usage provided by caller", "reported usage used directly")
+		return result, nil
+	}
+
+	if !ok {
+		if callerReported.HasAny() {
+			result.Usage = callerReported
+			result.Source = SourceReportedUsage
+			result.Note = joinNotes(
+				modelNote,
+				encodingNote,
+				"reported usage provided by caller",
+				"protocol unsupported, reported usage returned as-is",
+			)
+			return result, nil
+		}
+		result.Source = SourceUnsupported
+		result.Supported = false
+		result.Note = joinNotes(modelNote, encodingNote, fmt.Sprintf("unsupported protocol: %s", req.Protocol))
+		return result, nil
+	}
+
+	promptResult, err := extractPromptWithPrepared(estimator, prepared, req.RequestBody)
+	if err != nil {
+		return EstimateResult{}, fmt.Errorf("extract prompt: %w", err)
+	}
+
+	localUsage := Usage{}
+	if promptResult.Text != "" || promptResult.ExtraTokens > 0 {
+		count, err := s.codec.Count(encoding, promptResult.Text)
+		if err != nil {
+			return EstimateResult{}, fmt.Errorf("count prompt tokens: %w", err)
+		}
+		localUsage.PromptTokens = count + promptResult.ExtraTokens
+		result.PromptTextLen = utf8.RuneCountInString(promptResult.Text)
+	}
+
+	localUsage = NormalizeUsage(localUsage)
+
+	switch {
+	case callerReported.HasAny() && localUsage.HasAny():
+		result.Usage = MergeUsage(callerReported, localUsage)
+		result.Source = SourceMerged
+		result.Note = joinNotes(modelNote, encodingNote, "reported usage provided by caller", promptResult.Note, "reported usage incomplete, merged with local estimate")
+	case callerReported.HasAny():
+		result.Usage = callerReported
+		result.Source = SourceReportedUsage
+		result.Note = joinNotes(modelNote, encodingNote, "reported usage provided by caller", promptResult.Note, "local estimate unavailable, reported usage returned")
+	case localUsage.HasAny():
+		result.Usage = localUsage
+		result.Source = SourceLocalEstimate
+		result.Note = joinNotes(modelNote, encodingNote, promptResult.Note, "local estimate used")
+	default:
+		result.Source = SourceUnsupported
+		result.Supported = promptResult.Supported
+		if !result.Supported {
+			result.Note = joinNotes(modelNote, encodingNote, promptResult.Note, "protocol payload unsupported")
+		} else {
+			result.Note = joinNotes(modelNote, encodingNote, promptResult.Note, "no text extracted from payload")
 		}
 	}
 

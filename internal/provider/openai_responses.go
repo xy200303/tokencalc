@@ -14,6 +14,16 @@ func NewOpenAIResponses(policy PlaceholderPolicy) Estimator {
 	return openAIResponsesEstimator{policy: buildPolicy(policy)}
 }
 
+func (e openAIResponsesEstimator) NewStreamAccumulator() StreamAccumulator {
+	return &openAIResponsesStreamAccumulator{
+		baseStreamAccumulator: newBaseStreamAccumulator(
+			"reported usage extracted from stream events",
+			"stream contained no extractable responses deltas",
+		),
+		policy: e.policy,
+	}
+}
+
 func (e openAIResponsesEstimator) PrepareRequest(body []byte) (RequestPayload, error) {
 	return PrepareRequestObject(body)
 }
@@ -185,4 +195,31 @@ func extractOpenAIResponsesUsage(mapped map[string]any) ReportedUsage {
 		usage.CompletionTokens = intValue(usageMap["completion_tokens"])
 	}
 	return usage
+}
+
+type openAIResponsesStreamAccumulator struct {
+	baseStreamAccumulator
+	policy text.PlaceholderPolicy
+}
+
+func (a *openAIResponsesStreamAccumulator) AddEvent(event map[string]any) {
+	a.setModelIfEmpty(findModelInObject(event, [][]string{{"model"}, {"response", "model"}}))
+	a.mergeUsage(extractOpenAIResponsesUsage(event))
+	if response, ok := text.AsMap(event["response"]); ok {
+		a.mergeUsage(extractOpenAIResponsesUsage(response))
+	}
+
+	eventType := strings.ToLower(text.StringValue(event["type"]))
+	switch eventType {
+	case "response.output_text.delta":
+		a.builder.AddText(text.FirstString(event, "delta", "text"))
+	case "response.output_text.done":
+		a.builder.AddText(text.FirstString(event, "text"))
+	case "response.completed":
+		if response, ok := event["response"]; ok {
+			appendGenericContent(a.builder, response, a.policy)
+		}
+	default:
+		appendGenericContent(a.builder, event, a.policy)
+	}
 }

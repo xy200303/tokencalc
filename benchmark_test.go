@@ -2,6 +2,7 @@ package tokencalc
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -61,6 +62,22 @@ func BenchmarkEstimateOpenAIChatLocal(b *testing.B) {
 	}
 }
 
+func BenchmarkEstimateOpenAIChatPromptOnly(b *testing.B) {
+	service := New()
+	request := EstimateRequest{
+		Protocol:    ProtocolOpenAIChat,
+		RequestBody: mustReadBenchmarkFile(b, "testdata/openai_chat/request.json"),
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := service.Estimate(request); err != nil {
+			b.Fatalf("Estimate() error = %v", err)
+		}
+	}
+}
+
 func BenchmarkEstimateOpenAIChatReportedUsage(b *testing.B) {
 	service := New()
 	request := EstimateRequest{
@@ -84,6 +101,24 @@ func BenchmarkEstimateOpenAIChatStream(b *testing.B) {
 		Protocol:     ProtocolOpenAIChat,
 		RequestBody:  mustReadBenchmarkFile(b, "testdata/openai_chat/request.json"),
 		ResponseBody: mustReadBenchmarkFile(b, "testdata/openai_chat/stream.sse"),
+		IsStream:     true,
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := service.Estimate(request); err != nil {
+			b.Fatalf("Estimate() error = %v", err)
+		}
+	}
+}
+
+func BenchmarkEstimateOpenAIChatSingleStreamChunk(b *testing.B) {
+	service := New()
+	request := EstimateRequest{
+		Protocol:     ProtocolOpenAIChat,
+		RequestModel: "gpt-4o-mini",
+		ResponseBody: []byte("data: {\"choices\":[{\"delta\":{\"content\":\"One\"}}]}\n\n"),
 		IsStream:     true,
 	}
 
@@ -124,6 +159,23 @@ func BenchmarkEstimateBatchOpenAIChat8(b *testing.B) {
 	}
 }
 
+func BenchmarkEstimateOpenAIResponsesLocal(b *testing.B) {
+	service := New()
+	request := EstimateRequest{
+		Protocol:     ProtocolOpenAIResponses,
+		RequestBody:  mustReadBenchmarkFile(b, "testdata/openai_responses/request.json"),
+		ResponseBody: mustReadBenchmarkFile(b, "testdata/openai_responses/response.json"),
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := service.Estimate(request); err != nil {
+			b.Fatalf("Estimate() error = %v", err)
+		}
+	}
+}
+
 func BenchmarkEstimateOpenAIResponsesReportedUsage(b *testing.B) {
 	service := New()
 	request := EstimateRequest{
@@ -141,6 +193,126 @@ func BenchmarkEstimateOpenAIResponsesReportedUsage(b *testing.B) {
 	}
 }
 
+func BenchmarkEstimateAnthropicLocal(b *testing.B) {
+	service := New()
+	request := EstimateRequest{
+		Protocol:     ProtocolAnthropic,
+		RequestBody:  mustReadBenchmarkFile(b, "testdata/anthropic/request.json"),
+		ResponseBody: mustReadBenchmarkFile(b, "testdata/anthropic/response.json"),
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := service.Estimate(request); err != nil {
+			b.Fatalf("Estimate() error = %v", err)
+		}
+	}
+}
+
+func BenchmarkEstimateAnthropicReportedUsage(b *testing.B) {
+	service := New()
+	request := EstimateRequest{
+		Protocol:     ProtocolAnthropic,
+		RequestBody:  mustReadBenchmarkFile(b, "testdata/anthropic/request.json"),
+		ResponseBody: mustReadBenchmarkFile(b, "testdata/anthropic/response_with_usage.json"),
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := service.Estimate(request); err != nil {
+			b.Fatalf("Estimate() error = %v", err)
+		}
+	}
+}
+
+func BenchmarkEstimateGeminiLocal(b *testing.B) {
+	service := New()
+	request := EstimateRequest{
+		Protocol:     ProtocolGemini,
+		RequestBody:  mustReadBenchmarkFile(b, "testdata/gemini/request.json"),
+		ResponseBody: mustReadBenchmarkFile(b, "testdata/gemini/response.json"),
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := service.Estimate(request); err != nil {
+			b.Fatalf("Estimate() error = %v", err)
+		}
+	}
+}
+
+func BenchmarkEstimateGeminiReportedUsage(b *testing.B) {
+	service := New()
+	request := EstimateRequest{
+		Protocol:     ProtocolGemini,
+		RequestBody:  mustReadBenchmarkFile(b, "testdata/gemini/request.json"),
+		ResponseBody: mustReadBenchmarkFile(b, "testdata/gemini/response_with_usage.json"),
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := service.Estimate(request); err != nil {
+			b.Fatalf("Estimate() error = %v", err)
+		}
+	}
+}
+
+func BenchmarkStreamingCounterOpenAIChatLocal(b *testing.B) {
+	request := EstimateRequest{
+		Protocol:     ProtocolOpenAIChat,
+		RequestModel: "gpt-4o-mini",
+		RequestBody:  mustReadBenchmarkFile(b, "testdata/openai_chat/request.json"),
+	}
+	chunks := mustReadBenchmarkStreamChunks(b, "testdata/openai_chat/stream.sse")
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		counter, err := NewStreamingCounter(request)
+		if err != nil {
+			b.Fatalf("NewStreamingCounter() error = %v", err)
+		}
+		for _, chunk := range chunks {
+			if _, err := counter.AddChunk(chunk); err != nil {
+				b.Fatalf("AddChunk() error = %v", err)
+			}
+		}
+		if _, err := counter.FinalResult(); err != nil {
+			b.Fatalf("FinalResult() error = %v", err)
+		}
+	}
+}
+
+func BenchmarkStreamingCounterOpenAIChatUsageSync(b *testing.B) {
+	request := EstimateRequest{
+		Protocol:     ProtocolOpenAIChat,
+		RequestModel: "gpt-4o-mini",
+		RequestBody:  mustReadBenchmarkFile(b, "testdata/openai_chat/request.json"),
+	}
+	chunks := mustReadBenchmarkStreamChunks(b, "testdata/openai_chat/stream_with_usage.sse")
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		counter, err := NewStreamingCounter(request)
+		if err != nil {
+			b.Fatalf("NewStreamingCounter() error = %v", err)
+		}
+		for _, chunk := range chunks {
+			if _, err := counter.AddChunk(chunk); err != nil {
+				b.Fatalf("AddChunk() error = %v", err)
+			}
+		}
+		if _, err := counter.FinalResult(); err != nil {
+			b.Fatalf("FinalResult() error = %v", err)
+		}
+	}
+}
+
 func mustReadBenchmarkFile(b *testing.B, path string) []byte {
 	b.Helper()
 
@@ -149,4 +321,20 @@ func mustReadBenchmarkFile(b *testing.B, path string) []byte {
 		b.Fatalf("ReadFile(%q) error = %v", path, err)
 	}
 	return data
+}
+
+func mustReadBenchmarkStreamChunks(b *testing.B, path string) [][]byte {
+	b.Helper()
+
+	raw := string(mustReadBenchmarkFile(b, path))
+	parts := strings.Split(raw, "\n\n")
+	chunks := make([][]byte, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		chunks = append(chunks, []byte(part+"\n\n"))
+	}
+	return chunks
 }

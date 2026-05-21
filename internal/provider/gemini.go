@@ -10,6 +10,16 @@ func NewGemini(policy PlaceholderPolicy) Estimator {
 	return geminiEstimator{policy: buildPolicy(policy)}
 }
 
+func (e geminiEstimator) NewStreamAccumulator() StreamAccumulator {
+	return &geminiStreamAccumulator{
+		baseStreamAccumulator: newBaseStreamAccumulator(
+			"reported usage extracted from stream events",
+			"stream contained no extractable gemini deltas",
+		),
+		policy: e.policy,
+	}
+}
+
 func (e geminiEstimator) PrepareRequest(body []byte) (RequestPayload, error) {
 	return PrepareRequestObject(body)
 }
@@ -148,4 +158,15 @@ func extractGeminiUsage(mapped map[string]any) ReportedUsage {
 		CompletionTokens: intValue(usageMap["candidatesTokenCount"]),
 		TotalTokens:      intValue(usageMap["totalTokenCount"]),
 	}
+}
+
+type geminiStreamAccumulator struct {
+	baseStreamAccumulator
+	policy text.PlaceholderPolicy
+}
+
+func (a *geminiStreamAccumulator) AddEvent(event map[string]any) {
+	a.setModelIfEmpty(findModelInObject(event, [][]string{{"model"}, {"modelVersion"}, {"model_version"}, {"response", "model"}, {"response", "modelVersion"}}))
+	a.mergeUsage(extractGeminiUsage(event))
+	appendGenericContent(a.builder, event, a.policy)
 }

@@ -34,6 +34,12 @@ func (c *bytesCollector) FinalBody() []byte {
 	return append([]byte(nil), c.buf.Bytes()...)
 }
 
+func (c *bytesCollector) BodyView() []byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.Bytes()
+}
+
 func ExtractEvents(body []byte) [][]byte {
 	trimmed := bytes.TrimSpace(body)
 	if len(trimmed) == 0 {

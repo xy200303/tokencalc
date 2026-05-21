@@ -65,6 +65,68 @@ type PreparedEstimator interface {
 	ExtractResponseModelPrepared(payload ResponsePayload, isStream bool) string
 }
 
+type StreamAccumulator interface {
+	AddEvent(event map[string]any)
+	Completion() ExtractResult
+	ReportedUsage() ReportedUsageResult
+	Model() string
+}
+
+type IncrementalStreamEstimator interface {
+	NewStreamAccumulator() StreamAccumulator
+}
+
+type baseStreamAccumulator struct {
+	builder   *text.Builder
+	usage     ReportedUsage
+	model     string
+	usageNote string
+	emptyNote string
+}
+
+func newBaseStreamAccumulator(usageNote string, emptyNote string) baseStreamAccumulator {
+	return baseStreamAccumulator{
+		builder:   text.NewBuilder(),
+		usageNote: usageNote,
+		emptyNote: emptyNote,
+	}
+}
+
+func (a *baseStreamAccumulator) setModelIfEmpty(model string) {
+	model = strings.TrimSpace(model)
+	if model == "" || a.model != "" {
+		return
+	}
+	a.model = model
+}
+
+func (a *baseStreamAccumulator) mergeUsage(usage ReportedUsage) {
+	a.usage = mergeReportedUsage(a.usage, usage)
+}
+
+func (a *baseStreamAccumulator) Completion() ExtractResult {
+	result := resultFromBuilder(a.builder)
+	if result.Text == "" && result.ExtraTokens == 0 {
+		result.Note = joinProviderNotes(result.Note, a.emptyNote)
+	}
+	return result
+}
+
+func (a *baseStreamAccumulator) ReportedUsage() ReportedUsageResult {
+	usage := normalizeReportedUsage(a.usage)
+	if !usage.HasAny() {
+		return ReportedUsageResult{}
+	}
+	return ReportedUsageResult{
+		Usage: usage,
+		Note:  a.usageNote,
+	}
+}
+
+func (a *baseStreamAccumulator) Model() string {
+	return a.model
+}
+
 func decodeJSONObject(body []byte) (map[string]any, error) {
 	body = bytes.TrimSpace(body)
 	if len(body) == 0 {
