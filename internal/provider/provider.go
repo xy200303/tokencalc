@@ -76,6 +76,10 @@ type IncrementalStreamEstimator interface {
 	NewStreamAccumulator() StreamAccumulator
 }
 
+type IncrementalCompletionAccumulator interface {
+	CompletionRuneCount() int
+}
+
 type baseStreamAccumulator struct {
 	builder   *text.Builder
 	usage     ReportedUsage
@@ -125,6 +129,10 @@ func (a *baseStreamAccumulator) ReportedUsage() ReportedUsageResult {
 
 func (a *baseStreamAccumulator) Model() string {
 	return a.model
+}
+
+func (a *baseStreamAccumulator) CompletionRuneCount() int {
+	return a.builder.RuneCount()
 }
 
 func decodeJSONObject(body []byte) (map[string]any, error) {

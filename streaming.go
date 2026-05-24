@@ -28,8 +28,13 @@ type StreamingCounter struct {
 }
 
 func NewStreamingCounter(req EstimateRequest, options ...Option) (*StreamingCounter, error) {
+	service := sharedDefaultService
+	if len(options) > 0 {
+		service = newService(options...)
+	}
+
 	counter := &StreamingCounter{
-		service: newService(options...),
+		service: service,
 		options: append([]Option(nil), options...),
 	}
 	if err := counter.resetLocked(req); err != nil {
@@ -80,7 +85,7 @@ func (c *StreamingCounter) Clear() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	return c.resetLocked(c.req)
+	return c.clearLocked()
 }
 
 func (c *StreamingCounter) Reset(req EstimateRequest) error {
@@ -179,16 +184,32 @@ func (c *StreamingCounter) resetLocked(req EstimateRequest) error {
 	c.req = req
 	c.prompt = EstimateResult{}
 	c.usePrompt = false
+	c.resetStreamStateLocked()
+	c.preparePromptBase()
+	c.prepareFastPath()
+
+	return nil
+}
+
+func (c *StreamingCounter) clearLocked() error {
+	collector, err := NewStreamCollectorWithOptions(c.req.Protocol, c.options...)
+	if err != nil {
+		return err
+	}
+
+	c.collector = collector
+	c.resetStreamStateLocked()
+	c.prepareFastPath()
+	return nil
+}
+
+func (c *StreamingCounter) resetStreamStateLocked() {
 	c.parser = streamEventParser{}
 	c.acc = nil
 	c.fastPath = false
 	c.last = EstimateResult{}
 	c.hasLast = false
 	c.dirty = false
-	c.preparePromptBase()
-	c.prepareFastPath()
-
-	return nil
 }
 
 func (c *StreamingCounter) preparePromptBase() {
@@ -200,7 +221,7 @@ func (c *StreamingCounter) preparePromptBase() {
 	promptReq.ResponseBody = nil
 	promptReq.IsStream = false
 
-	promptResult, err := c.service.estimatePromptOnly(promptReq)
+	promptResult, err := c.service.estimatePromptOnlyCached(promptReq)
 	if err != nil {
 		return
 	}
@@ -256,23 +277,26 @@ func (c *StreamingCounter) estimateCurrent() (EstimateResult, error) {
 }
 
 func (c *StreamingCounter) processIncremental(part []byte, strict bool) (StreamEstimateUpdate, error) {
-	events := c.parser.AddChunk(part, strict)
-	if len(events) == 0 {
+	processed, err := c.parser.ProcessChunk(part, strict, func(event []byte) error {
+		payload, err := decodeAnyObject(event)
+		if err != nil {
+			return err
+		}
+		c.acc.AddEvent(payload)
+		return nil
+	})
+	if err != nil {
+		if !strict && isIncompleteStreamError(err) {
+			return c.currentUpdate(), nil
+		}
+		return c.currentUpdate(), err
+	}
+
+	if !processed {
 		if len(bytes.TrimSpace(c.parser.pending)) == 0 {
 			c.dirty = false
 		}
 		return c.currentUpdate(), nil
-	}
-
-	for _, event := range events {
-		payload, err := decodeAnyObject(event)
-		if err != nil {
-			if !strict && isIncompleteStreamError(err) {
-				return c.currentUpdate(), nil
-			}
-			return c.currentUpdate(), err
-		}
-		c.acc.AddEvent(payload)
 	}
 
 	result, err := c.estimateCurrentIncremental()
@@ -319,7 +343,7 @@ func (c *StreamingCounter) estimateCurrentIncremental() (EstimateResult, error) 
 			return EstimateResult{}, err
 		}
 		localUsage.CompletionTokens = count + completionResult.ExtraTokens
-		result.CompletionTextLen = utf8.RuneCountInString(completionResult.Text)
+		result.CompletionTextLen = c.incrementalCompletionRuneCount(completionResult)
 	}
 	localUsage = NormalizeUsage(localUsage)
 
@@ -359,6 +383,14 @@ func (c *StreamingCounter) estimateCurrentIncremental() (EstimateResult, error) 
 	}
 
 	return c.combineIncrementalPrompt(result), nil
+}
+
+func (c *StreamingCounter) incrementalCompletionRuneCount(completionResult provider.ExtractResult) int {
+	incremental, ok := c.acc.(provider.IncrementalCompletionAccumulator)
+	if !ok {
+		return utf8.RuneCountInString(completionResult.Text)
+	}
+	return incremental.CompletionRuneCount()
 }
 
 func (c *StreamingCounter) combineIncrementalPrompt(response EstimateResult) EstimateResult {
@@ -427,51 +459,64 @@ type streamEventParser struct {
 	pending []byte
 }
 
-func (p *streamEventParser) AddChunk(part []byte, flush bool) [][]byte {
-	buf := make([]byte, 0, len(p.pending)+len(part))
-	buf = append(buf, p.pending...)
-	buf = append(buf, part...)
+func (p *streamEventParser) ProcessChunk(part []byte, flush bool, visit func([]byte) error) (bool, error) {
+	buf := part
+	if len(p.pending) > 0 {
+		buf = append(append(make([]byte, 0, len(p.pending)+len(part)), p.pending...), part...)
+	}
 
-	events := make([][]byte, 0)
+	processed := false
 	start := 0
 	for index := 0; index < len(buf); index++ {
 		if buf[index] != '\n' {
 			continue
 		}
-		p.appendLineEvents(buf[start:index], &events)
+		handled, err := p.processLine(buf[start:index], visit)
+		if err != nil {
+			return processed, err
+		}
+		if handled {
+			processed = true
+		}
 		start = index + 1
 	}
 
 	if flush {
-		p.appendLineEvents(buf[start:], &events)
+		handled, err := p.processLine(buf[start:], visit)
+		if err != nil {
+			return processed, err
+		}
+		if handled {
+			processed = true
+		}
 		p.pending = nil
-		return events
+		return processed, nil
 	}
 
 	p.pending = append(p.pending[:0], buf[start:]...)
-	return events
+	return processed, nil
 }
 
-func (p *streamEventParser) appendLineEvents(line []byte, events *[][]byte) {
+func (p *streamEventParser) processLine(line []byte, visit func([]byte) error) (bool, error) {
 	line = bytes.TrimSpace(line)
 	if len(line) == 0 {
-		return
+		return false, nil
 	}
 
 	if bytes.HasPrefix(line, []byte("event:")) {
-		return
+		return false, nil
 	}
 
 	if bytes.HasPrefix(line, []byte("data:")) {
 		payload := bytes.TrimSpace(line[len("data:"):])
 		if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
-			return
+			return false, nil
 		}
-		*events = append(*events, payload)
-		return
+		return true, visit(payload)
 	}
 
 	if line[0] == '{' || line[0] == '[' {
-		*events = append(*events, line)
+		return true, visit(line)
 	}
+	return false, nil
 }

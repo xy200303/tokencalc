@@ -2,6 +2,13 @@ package tokencalc
 
 import internalstream "github.com/xy200303/tokencalc/internal/stream"
 
+var builtInStreamCollectorFactories = map[Protocol]StreamCollectorFactory{
+	ProtocolOpenAIChat:      func() StreamCollector { return internalstream.NewOpenAICollector() },
+	ProtocolOpenAIResponses: func() StreamCollector { return internalstream.NewOpenAICollector() },
+	ProtocolAnthropic:       func() StreamCollector { return internalstream.NewAnthropicCollector() },
+	ProtocolGemini:          func() StreamCollector { return internalstream.NewGeminiCollector() },
+}
+
 type StreamCollector interface {
 	AddChunk(part []byte) error
 	FinalBody() []byte
@@ -31,12 +38,7 @@ func NewStreamCollectorWithOptions(protocol Protocol, options ...Option) (Stream
 }
 
 func defaultStreamCollectorFactories() map[Protocol]StreamCollectorFactory {
-	return map[Protocol]StreamCollectorFactory{
-		ProtocolOpenAIChat:      func() StreamCollector { return internalstream.NewOpenAICollector() },
-		ProtocolOpenAIResponses: func() StreamCollector { return internalstream.NewOpenAICollector() },
-		ProtocolAnthropic:       func() StreamCollector { return internalstream.NewAnthropicCollector() },
-		ProtocolGemini:          func() StreamCollector { return internalstream.NewGeminiCollector() },
-	}
+	return builtInStreamCollectorFactories
 }
 
 func newBuiltInStreamCollector(protocol Protocol) (StreamCollector, error) {

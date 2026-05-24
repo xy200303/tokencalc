@@ -12,6 +12,7 @@ import (
 type service struct {
 	codec      codec.Counter
 	estimators map[Protocol]Estimator
+	prompt     *promptResultCache
 }
 
 type preparedPayloads struct {
@@ -24,9 +25,13 @@ type preparedPayloads struct {
 	respErr   error
 }
 
-var defaultService BatchService = New()
+var sharedDefaultService = newService()
+var defaultService BatchService = sharedDefaultService
 
 func New(options ...Option) BatchService {
+	if len(options) == 0 {
+		return sharedDefaultService
+	}
 	return newService(options...)
 }
 
@@ -54,6 +59,7 @@ func newService(options ...Option) *service {
 	return &service{
 		codec:      codec.NewTiktokenCodec(),
 		estimators: estimators,
+		prompt:     newPromptResultCache(128),
 	}
 }
 

@@ -666,22 +666,24 @@ go test -run '^$' -bench . -benchmem .
 
 | Benchmark | ns/op | B/op | allocs/op |
 | --- | ---: | ---: | ---: |
-| `BenchmarkCountText` | 113603 | 26144 | 374 |
-| `BenchmarkCountTextsBatch8` | 847566 | 209472 | 2993 |
-| `BenchmarkEstimateOpenAIChatLocal` | 34217 | 10480 | 167 |
-| `BenchmarkEstimateOpenAIChatPromptOnly` | 19666 | 5856 | 97 |
-| `BenchmarkEstimateOpenAIChatReportedUsage` | 10435 | 5128 | 81 |
-| `BenchmarkEstimateOpenAIChatStream` | 42481 | 19024 | 222 |
-| `BenchmarkEstimateOpenAIChatSingleStreamChunk` | 8854 | 7008 | 45 |
-| `BenchmarkEstimateBatchOpenAIChat8` | 335881 | 84992 | 1337 |
-| `BenchmarkEstimateOpenAIResponsesLocal` | 34461 | 9912 | 161 |
-| `BenchmarkEstimateOpenAIResponsesReportedUsage` | 12253 | 5487 | 92 |
-| `BenchmarkEstimateAnthropicLocal` | 36263 | 14712 | 242 |
-| `BenchmarkEstimateAnthropicReportedUsage` | 22531 | 11120 | 182 |
-| `BenchmarkEstimateGeminiLocal` | 43364 | 17960 | 256 |
-| `BenchmarkEstimateGeminiReportedUsage` | 26455 | 12720 | 178 |
-| `BenchmarkStreamingCounterOpenAIChatLocal` | 55114 | 18032 | 266 |
-| `BenchmarkStreamingCounterOpenAIChatUsageSync` | 44767 | 16592 | 246 |
+| `BenchmarkCountText` | 62353 | 26144 | 374 |
+| `BenchmarkCountTextsBatch8` | 569569 | 209472 | 2993 |
+| `BenchmarkEstimateOpenAIChatLocal` | 19328 | 10480 | 167 |
+| `BenchmarkEstimateOpenAIChatPromptOnly` | 11088 | 5856 | 97 |
+| `BenchmarkEstimateOpenAIChatReportedUsage` | 7624 | 5128 | 81 |
+| `BenchmarkEstimateOpenAIChatStream` | 29234 | 19024 | 222 |
+| `BenchmarkEstimateOpenAIChatSingleStreamChunk` | 6440 | 7008 | 45 |
+| `BenchmarkEstimateBatchOpenAIChat8` | 185955 | 84992 | 1337 |
+| `BenchmarkEstimateOpenAIResponsesLocal` | 19120 | 9912 | 161 |
+| `BenchmarkEstimateOpenAIResponsesReportedUsage` | 7291 | 5487 | 92 |
+| `BenchmarkEstimateAnthropicLocal` | 22497 | 14712 | 242 |
+| `BenchmarkEstimateAnthropicReportedUsage` | 15184 | 11120 | 182 |
+| `BenchmarkEstimateGeminiLocal` | 31692 | 17960 | 256 |
+| `BenchmarkEstimateGeminiReportedUsage` | 14489 | 12720 | 178 |
+| `BenchmarkStreamingCounterOpenAIChatLocal` | 17083 | 11592 | 155 |
+| `BenchmarkStreamingCounterOpenAIChatUsageSync` | 14572 | 10088 | 135 |
+| `BenchmarkStreamingCounterOpenAIChatLocalReuse` | 16859 | 11112 | 154 |
+| `BenchmarkStreamingCounterOpenAIChatUsageSyncReuse` | 13885 | 9608 | 134 |
 
 可以粗略理解为：
 
@@ -691,8 +693,11 @@ go test -run '^$' -bench . -benchmem .
 - 单个完整流式 chunk 的直接估算非常轻量，适合做增量统计
 - 流式场景会多一层事件聚合开销
 - `StreamingCounter` 的 benchmark 是“整段流会话”的端到端成本，不是单个 chunk 的成本
-- 经过当前这轮优化，`StreamingCounter` 已改成增量事件处理，避免每个 chunk 都对整段流重新解析
-- 相比早期“整段流反复全量重算”的实现，`StreamingCounter` 的耗时和分配都已经下降到更可用的量级
+- `StreamingCounterOpenAIChatLocal` / `UsageSync` 是每轮重新 `NewStreamingCounter(...)` 的结果
+- `StreamingCounterOpenAIChatLocalReuse` / `UsageSyncReuse` 是复用同一个 counter 并通过 `Clear()` 清空状态后的结果
+- 经过当前这轮优化，流式路径已经同时做了增量事件处理、共享 tokenizer 缓存和 prompt 基座缓存
+- 对同模板多轮会话，`NewStreamingCounter(...)` 和 `Clear()` 复用两种路径的差距已经被进一步压缩
+- 如果你的请求模板高度重复，steady-state 性能通常会更接近这组 benchmark；首次冷启动会略慢于这里的数值
 - Anthropic 和 Gemini 的本地估算分配更高，主要因为协议结构和占位符处理更复杂
 - 批量接口适合在单个 service 上复用配置和协议实现
 

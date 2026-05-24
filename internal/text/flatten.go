@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 type PlaceholderPolicy struct {
@@ -17,6 +18,7 @@ type Builder struct {
 	text        strings.Builder
 	hasText     bool
 	extraTokens int
+	runeCount   int
 	notes       []string
 	seenNotes   map[string]struct{}
 }
@@ -34,8 +36,10 @@ func (b *Builder) AddText(value string) {
 	}
 	if b.hasText {
 		b.text.WriteByte('\n')
+		b.runeCount++
 	}
 	b.text.WriteString(value)
+	b.runeCount += utf8.RuneCountInString(value)
 	b.hasText = true
 }
 
@@ -83,6 +87,10 @@ func (b *Builder) Result() (text string, extraTokens int, note string) {
 
 func (b *Builder) ResultText() string {
 	return b.text.String()
+}
+
+func (b *Builder) RuneCount() int {
+	return b.runeCount
 }
 
 func AsMap(value any) (map[string]any, bool) {

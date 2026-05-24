@@ -313,6 +313,66 @@ func BenchmarkStreamingCounterOpenAIChatUsageSync(b *testing.B) {
 	}
 }
 
+func BenchmarkStreamingCounterOpenAIChatLocalReuse(b *testing.B) {
+	request := EstimateRequest{
+		Protocol:     ProtocolOpenAIChat,
+		RequestModel: "gpt-4o-mini",
+		RequestBody:  mustReadBenchmarkFile(b, "testdata/openai_chat/request.json"),
+	}
+	chunks := mustReadBenchmarkStreamChunks(b, "testdata/openai_chat/stream.sse")
+
+	counter, err := NewStreamingCounter(request)
+	if err != nil {
+		b.Fatalf("NewStreamingCounter() error = %v", err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := counter.Clear(); err != nil {
+			b.Fatalf("Clear() error = %v", err)
+		}
+		for _, chunk := range chunks {
+			if _, err := counter.AddChunk(chunk); err != nil {
+				b.Fatalf("AddChunk() error = %v", err)
+			}
+		}
+		if _, err := counter.FinalResult(); err != nil {
+			b.Fatalf("FinalResult() error = %v", err)
+		}
+	}
+}
+
+func BenchmarkStreamingCounterOpenAIChatUsageSyncReuse(b *testing.B) {
+	request := EstimateRequest{
+		Protocol:     ProtocolOpenAIChat,
+		RequestModel: "gpt-4o-mini",
+		RequestBody:  mustReadBenchmarkFile(b, "testdata/openai_chat/request.json"),
+	}
+	chunks := mustReadBenchmarkStreamChunks(b, "testdata/openai_chat/stream_with_usage.sse")
+
+	counter, err := NewStreamingCounter(request)
+	if err != nil {
+		b.Fatalf("NewStreamingCounter() error = %v", err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := counter.Clear(); err != nil {
+			b.Fatalf("Clear() error = %v", err)
+		}
+		for _, chunk := range chunks {
+			if _, err := counter.AddChunk(chunk); err != nil {
+				b.Fatalf("AddChunk() error = %v", err)
+			}
+		}
+		if _, err := counter.FinalResult(); err != nil {
+			b.Fatalf("FinalResult() error = %v", err)
+		}
+	}
+}
+
 func mustReadBenchmarkFile(b *testing.B, path string) []byte {
 	b.Helper()
 
